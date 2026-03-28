@@ -221,7 +221,72 @@ jobs:
           python -m pip install --disable-pip-version-check --no-input pycargoebuild
           wget https://raw.githubusercontent.com/gentoo/gentoo/refs/heads/master/metadata/license-mapping.conf -O /tmp/license-mapping.conf
           cd "input/${WORKDIR}"
-          pycargoebuild --crate-tarball --distdir /tmp/ --license-mapping /tmp/license-mapping.conf
+
+          crate_tarball_path="/tmp/${P}-crates.tar.xz"
+
+          if [[ -f Cargo.toml ]] && grep -q '^\[workspace\]' Cargo.toml; then
+            echo "Detected Cargo workspace root at $(pwd)"
+
+            workspace_source="$(python - <<'PY'
+from pathlib import Path
+import tomllib
+
+doc = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))
+ws = doc.get("workspace", {})
+print("default-members" if ws.get("default-members") else "members")
+PY
+            )"
+            echo "Using workspace ${workspace_source}"
+
+            mapfile -t workspace_members < <(
+              python - <<'PY'
+from pathlib import Path
+import glob
+import tomllib
+
+doc = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))
+ws = doc.get("workspace", {})
+
+raw = ws.get("default-members")
+if not raw:
+    raw = ws.get("members", [])
+
+seen = set()
+for entry in raw:
+    if not isinstance(entry, str):
+        continue
+    expanded = glob.glob(entry) or [entry]
+    for item in expanded:
+        path = Path(item)
+        if not path.is_dir():
+            continue
+        if not (path / "Cargo.toml").is_file():
+            continue
+        normalized = path.as_posix().rstrip("/")
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            print(normalized)
+PY
+            )
+
+            if (( ${#workspace_members[@]} == 0 )); then
+              echo "No usable workspace members found in Cargo.toml"
+              exit 1
+            fi
+
+            echo "Running pycargoebuild for members: ${workspace_members[*]}"
+            pycargoebuild "${workspace_members[@]}" \
+              --crate-tarball \
+              --crate-tarball-path "${crate_tarball_path}" \
+              --distdir /tmp/ \
+              --license-mapping /tmp/license-mapping.conf
+          else
+            pycargoebuild \
+              --crate-tarball \
+              --crate-tarball-path "${crate_tarball_path}" \
+              --distdir /tmp/ \
+              --license-mapping /tmp/license-mapping.conf
+          fi
 
       - name: Setup dart
         if: inputs.LANG == 'dart'
