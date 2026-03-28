@@ -244,13 +244,15 @@ jobs:
               --crate-tarball \
               --crate-tarball-path "${crate_tarball_path}" \
               --distdir /tmp/ \
-              --license-mapping /tmp/license-mapping.conf
+              --license-mapping /tmp/license-mapping.conf \
+              --output /tmp/dummy.ebuild
           else
             pycargoebuild \
               --crate-tarball \
               --crate-tarball-path "${crate_tarball_path}" \
               --distdir /tmp/ \
-              --license-mapping /tmp/license-mapping.conf
+              --license-mapping /tmp/license-mapping.conf \
+              --output /tmp/dummy.ebuild
           fi
 
       - name: Setup dart
