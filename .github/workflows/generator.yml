@@ -227,46 +227,11 @@ jobs:
           if [[ -f Cargo.toml ]] && grep -q '^\[workspace\]' Cargo.toml; then
             echo "Detected Cargo workspace root at $(pwd)"
 
-            workspace_source="$(python - <<'PY'
-from pathlib import Path
-import tomllib
-
-doc = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))
-ws = doc.get("workspace", {})
-print("default-members" if ws.get("default-members") else "members")
-PY
-            )"
+            workspace_source="$(python3 "${{github.workspace}}/.github/scripts/get_workspace_source.py")"
             echo "Using workspace ${workspace_source}"
 
             mapfile -t workspace_members < <(
-              python - <<'PY'
-from pathlib import Path
-import glob
-import tomllib
-
-doc = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))
-ws = doc.get("workspace", {})
-
-raw = ws.get("default-members")
-if not raw:
-    raw = ws.get("members", [])
-
-seen = set()
-for entry in raw:
-    if not isinstance(entry, str):
-        continue
-    expanded = glob.glob(entry) or [entry]
-    for item in expanded:
-        path = Path(item)
-        if not path.is_dir():
-            continue
-        if not (path / "Cargo.toml").is_file():
-            continue
-        normalized = path.as_posix().rstrip("/")
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            print(normalized)
-PY
+              python3 "${{github.workspace}}/.github/scripts/get_workspace_members.py"
             )
 
             if (( ${#workspace_members[@]} == 0 )); then
