@@ -1,332 +1,42 @@
 name: "Generator"
+
 on:
   workflow_dispatch:
     inputs:
-      # https://github.com/torvalds/linux v6.19
-      # sys-kernel/gentoo-kernel/gentoo-kernel-6.19.ebuild
-      # release artiface: ${PN}-${PV}-deps.tar.xz: gentoo-kernel-6.19-deps.tar.xz
-      # release tag: ${P}=${PN}-${PV}: gentoo-kernel-6.19
-
       LANG:
         type: choice
         description: "generate golang(go-mod/vendor) or javascript(node_modules) deps"
         options:
-        - golang
-        - javascript
-        - javascript(pnpm)
-        - rust
-        - dart
-
+          - golang
+          - javascript
+          - javascript(pnpm)
+          - rust
+          - dart
       REPO:
         description: "(optional) github repo name: torvalds/linux"
-
       SOURCE_URL:
         description: "(optional) git clone url for non-GitHub platforms, e.g. https://github.com/torvalds/linux.git"
-
       TAG:
         description: "git tag: v6.19"
         required: true
-
       P:
         description: "P in ebuild: gentoo-kernel-6.19"
         required: true
-
       WORKDIR:
         description: "(optional) source directory to perform scripts"
-        default: ''
-
+        default: ""
       VENDORDIR:
         description: "(optional) golang vendor.tar.xz, input S in ebuild"
-        default: ''
-
-env:
-  # Opt in early to the upcoming JavaScript action runtime default.
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+        default: ""
 
 jobs:
-  Generator:
-    permissions:
-      contents: write # push tag and upload release assets
-    concurrency:
-      group: generator-${{ inputs.P }}-${{ inputs.LANG }}
-      cancel-in-progress: true
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Validate inputs
-        env:
-          REPO: ${{ inputs.REPO }}
-          SOURCE_URL: ${{ inputs.SOURCE_URL }}
-          TAG: ${{ inputs.TAG }}
-          P: ${{ inputs.P }}
-          WORKDIR: ${{ inputs.WORKDIR }}
-          VENDORDIR: ${{ inputs.VENDORDIR }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "$REPO" && -z "$SOURCE_URL" ]]; then
-            echo "Either REPO or SOURCE_URL must be provided"
-            exit 1
-          fi
-          if [[ -n "$REPO" && -n "$SOURCE_URL" ]]; then
-            echo "REPO and SOURCE_URL are mutually exclusive; provide exactly one"
-            exit 1
-          fi
-
-          if [[ -n "$REPO" ]]; then
-            [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
-              echo "Invalid REPO format: $REPO"
-              exit 1
-            }
-          fi
-          if [[ -n "$SOURCE_URL" ]]; then
-            [[ "$SOURCE_URL" =~ ^(https://|ssh://|git@).+\.git$ ]] || {
-              echo "Invalid SOURCE_URL format: $SOURCE_URL"
-              echo "Expected example: https://gitlab.com/group/project.git"
-              exit 1
-            }
-          fi
-
-          [[ "$TAG" =~ ^[A-Za-z0-9._/+:-]+$ ]] || {
-            echo "Invalid TAG format: $TAG"
-            exit 1
-          }
-          [[ "$P" =~ ^[A-Za-z0-9._+-]+$ ]] || {
-            echo "Invalid P format: $P"
-            exit 1
-          }
-          if [[ "$WORKDIR" == /* || "$WORKDIR" == *".."* ]]; then
-            echo "WORKDIR must be relative and must not contain '..'"
-            exit 1
-          fi
-          if [[ "$VENDORDIR" == /* || "$VENDORDIR" == *".."* ]]; then
-            echo "VENDORDIR must be relative and must not contain '..'"
-            exit 1
-          fi
-
-      - name: Checkout input repo from GitHub
-        if: inputs.REPO != ''
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ inputs.REPO }}
-          ref: ${{ inputs.TAG }}
-          fetch-depth: 0
-          path: "input"
-
-      - name: Checkout input repo from git URL
-        if: inputs.SOURCE_URL != ''
-        env:
-          SOURCE_URL: ${{ inputs.SOURCE_URL }}
-          TAG: ${{ inputs.TAG }}
-        run: |
-          set -euo pipefail
-          git clone --depth 1 --branch "$TAG" "$SOURCE_URL" input
-
-      - name: delete old tag
-        env:
-          P: ${{ inputs.P }}
-          LANG: ${{ inputs.LANG }}
-        run: |
-          set -euo pipefail
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
-          git tag --delete "$P" || true
-
-      - name: Setup go
-        if: inputs.LANG == 'golang'
-        uses: actions/setup-go@v6
-        with:
-          go-version: 'stable'
-          cache: false
-
-      - name: Generate golang deps
-        if: inputs.LANG == 'golang'
-        env:
-          P: ${{ inputs.P }}
-          WORKDIR: ${{ inputs.WORKDIR }}
-          VENDORDIR: ${{ inputs.VENDORDIR }}
-        run: |
-          set -euo pipefail
-          git tag "$P" -m "$P-deps.tar.xz $P-vendor.tar.xz"
-          cd "input/${WORKDIR}"
-          GOMODCACHE="${PWD}"/go-mod go mod download -modcacherw
-          tar --create --auto-compress --file "/tmp/${P}-deps.tar.xz" go-mod
-          if [[ x"${VENDORDIR}" != x"" ]]; then
-            rm -rf go-mod
-            if [[ -f go.work ]]; then
-              go work vendor -modcacherw -o "${VENDORDIR}/vendor"
-            else
-              go mod vendor -modcacherw -o "${VENDORDIR}/vendor"
-            fi
-            tar --create --auto-compress --file "/tmp/${P}-vendor.tar.xz" "${VENDORDIR}/vendor"
-          fi
-
-      - name: Generate javascript node_modules
-        if: inputs.LANG == 'javascript'
-        env:
-          P: ${{ inputs.P }}
-          WORKDIR: ${{ inputs.WORKDIR }}
-        run: |
-          set -euo pipefail
-          git tag "$P" -m "$P-node_modules.tar.xz"
-          cd "input/${WORKDIR}"
-          if [[ -f package-lock.json ]]; then
-            npm ci --legacy-peer-deps --cache "${PWD}/npm-cache"
-          else
-            npm install --legacy-peer-deps --cache "${PWD}/npm-cache"
-          fi
-          tar --create --auto-compress --file "/tmp/${P}-node_modules.tar.xz" node_modules
-          rm -rf node_modules
-
-      - name: Setup pnpm
-        if: inputs.LANG == 'javascript(pnpm)'
-        uses: pnpm/action-setup@v5
-        with:
-          version: latest
-
-      - name: Generate javascript(pnpm) node_modules
-        if: inputs.LANG == 'javascript(pnpm)'
-        env:
-          P: ${{ inputs.P }}
-          WORKDIR: ${{ inputs.WORKDIR }}
-        run: |
-          set -euo pipefail
-          git tag "$P" -m "$P-node_modules-pnpm.tar.xz"
-          cd "input/${WORKDIR}"
-          if [[ -f pnpm-lock.yaml ]]; then
-            pnpm install --frozen-lockfile
-          else
-            pnpm install
-          fi
-          tar --create --auto-compress --file "/tmp/${P}-node_modules-pnpm.tar.xz" node_modules
-          rm -rf node_modules
-
-      - name: Generate rust crates
-        if: inputs.LANG == 'rust'
-        env:
-          P: ${{ inputs.P }}
-          WORKDIR: ${{ inputs.WORKDIR }}
-        run: |
-          set -euo pipefail
-          git tag "$P" -m "$P-crates.tar.xz"
-          python -m pip install --disable-pip-version-check --no-input pycargoebuild
-          wget https://raw.githubusercontent.com/gentoo/gentoo/refs/heads/master/metadata/license-mapping.conf -O /tmp/license-mapping.conf
-          cd "input/${WORKDIR}"
-
-          crate_tarball_path="/tmp/${P}-crates.tar.xz"
-
-          if [[ -f Cargo.toml ]] && grep -q '^\[workspace\]' Cargo.toml; then
-            echo "Detected Cargo workspace root at $(pwd)"
-
-            workspace_source="$(python3 "${{github.workspace}}/.github/scripts/get_workspace_source.py")"
-            echo "Using workspace ${workspace_source}"
-
-            mapfile -t workspace_members < <(
-              python3 "${{github.workspace}}/.github/scripts/get_workspace_members.py"
-            )
-
-            if (( ${#workspace_members[@]} == 0 )); then
-              echo "No usable workspace members found in Cargo.toml"
-              exit 1
-            fi
-
-            echo "Running pycargoebuild for members: ${workspace_members[*]}"
-            pycargoebuild "${workspace_members[@]}" \
-              --crate-tarball \
-              --crate-tarball-path "${crate_tarball_path}" \
-              --distdir /tmp/ \
-              --license-mapping /tmp/license-mapping.conf \
-              --output /tmp/dummy.ebuild
-          else
-            pycargoebuild \
-              --crate-tarball \
-              --crate-tarball-path "${crate_tarball_path}" \
-              --distdir /tmp/ \
-              --license-mapping /tmp/license-mapping.conf \
-              --output /tmp/dummy.ebuild
-          fi
-
-      - name: Setup dart
-        if: inputs.LANG == 'dart'
-        uses: dart-lang/setup-dart@v1
-        with:
-          sdk: stable
-
-      - name: Generate dart pubcache
-        if: inputs.LANG == 'dart'
-        env:
-          P: ${{ inputs.P }}
-          WORKDIR: ${{ inputs.WORKDIR }}
-          PUB_CACHE: ${{ github.workspace }}/input/${{ inputs.WORKDIR }}/${{ inputs.P }}/pubcache
-        run: |
-          set -euo pipefail
-          git tag "$P" -m "$P-pubcache.tar.xz"
-          cd "input/${WORKDIR}"
-          dart --disable-analytics
-          dart pub get
-          tar --create --auto-compress --file "/tmp/${P}-pubcache.tar.xz" "${P}"
-
-      - name: push tag
-        env:
-          P: ${{ inputs.P }}
-        run: |
-          set -euo pipefail
-          git push origin --force "$P"
-
-      - name: Upload release artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-          P: ${{ inputs.P }}
-          LANG: ${{ inputs.LANG }}
-          WORKDIR: ${{ inputs.WORKDIR }}
-          VENDORDIR: ${{ inputs.VENDORDIR }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-
-          if ! gh release view "$P" >/dev/null 2>&1; then
-            gh release create "$P" --verify-tag --title "$P" --notes ""
-          fi
-
-          files=()
-          case "$LANG" in
-            golang)
-              files+=("/tmp/${P}-deps.tar.xz")
-              if [[ -n "$VENDORDIR" ]]; then
-                files+=("/tmp/${P}-vendor.tar.xz")
-              fi
-              ;;
-            javascript)
-              files+=("/tmp/${P}-node_modules.tar.xz")
-              ;;
-            'javascript(pnpm)')
-              files+=("/tmp/${P}-node_modules-pnpm.tar.xz")
-              ;;
-            rust)
-              files+=(/tmp/*-crates.tar.xz)
-              files+=("input/${WORKDIR}"/*.ebuild)
-              ;;
-            dart)
-              files+=(/tmp/*-pubcache.tar.xz)
-              ;;
-            *)
-              echo "Unsupported LANG: $LANG"
-              exit 1
-              ;;
-          esac
-
-          if [[ ${#files[@]} -eq 0 ]]; then
-            echo "No files matched for upload"
-            exit 1
-          fi
-
-          gh release upload "$P" "${files[@]}" --clobber
+  generator:
+    uses: ./.github/workflows/_generator_reusable.yml
+    with:
+      LANG: ${{ inputs.LANG }}
+      REPO: ${{ inputs.REPO }}
+      SOURCE_URL: ${{ inputs.SOURCE_URL }}
+      TAG: ${{ inputs.TAG }}
+      P: ${{ inputs.P }}
+      WORKDIR: ${{ inputs.WORKDIR }}
+      VENDORDIR: ${{ inputs.VENDORDIR }}

@@ -1,0 +1,163 @@
+name: "Issue Generator"
+
+on:
+  issue_comment:
+    types:
+      - created
+
+jobs:
+  parse:
+    if: >
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.comment.body == '/approve' &&
+      github.event.comment.user.login == 'nuclear06'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      lang: ${{ steps.parse.outputs.lang }}
+      repo: ${{ steps.parse.outputs.repo }}
+      source_url: ${{ steps.parse.outputs.source_url }}
+      tag: ${{ steps.parse.outputs.tag }}
+      p: ${{ steps.parse.outputs.p }}
+      workdir: ${{ steps.parse.outputs.workdir }}
+      vendordir: ${{ steps.parse.outputs.vendordir }}
+      package: ${{ steps.parse.outputs.package }}
+      version: ${{ steps.parse.outputs.version }}
+      source_issue_url: ${{ steps.parse.outputs.source_issue_url }}
+      should_run: ${{ steps.labels.outputs.should_run }}
+    steps:
+      - name: Check labels
+        id: labels
+        env:
+          LABELS_JSON: ${{ toJson(github.event.issue.labels) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+
+          labels = json.loads(os.environ["LABELS_JSON"])
+          should_run = any(label.get("name") == "deps-request" for label in labels)
+          print(f"should_run={'true' if should_run else 'false'}")
+          PY
+
+      - name: Stop when issue is not a deps request
+        if: steps.labels.outputs.should_run != 'true'
+        run: |
+          echo "Issue is not labeled deps-request"
+
+      - name: Parse issue body
+        id: parse
+        if: steps.labels.outputs.should_run == 'true'
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import re
+
+          body = os.environ["ISSUE_BODY"]
+          pattern = re.compile(r"^### (.+?)\n(.*?)(?=^### |\Z)", re.M | re.S)
+          data = {}
+          for title, value in pattern.findall(body):
+              key = title.strip().lower().replace(" ", "_")
+              data[key] = value.strip()
+
+          data["repo"] = data.get("github_repo", "")
+
+          required = {
+              "package": "Package",
+              "version": "Version",
+              "lang": "Language",
+              "tag": "Tag",
+              "p": "P",
+          }
+          missing = [label for key, label in required.items() if not data.get(key)]
+          if missing:
+              raise SystemExit(f"Missing required issue form fields: {', '.join(missing)}")
+
+          for key in [
+              "package",
+              "version",
+              "lang",
+              "repo",
+              "source_url",
+              "tag",
+              "p",
+              "workdir",
+              "vendordir",
+              "source_issue_url",
+          ]:
+              value = data.get(key, "")
+              print(f"{key}<<EOF")
+              print(value)
+              print("EOF")
+          PY
+
+      - name: Comment start
+        if: steps.labels.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PACKAGE: ${{ steps.parse.outputs.package }}
+          VERSION: ${{ steps.parse.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh issue comment "$ISSUE_NUMBER" \
+            --body "Approved by @${{ github.event.comment.user.login }}. Starting deps generation for \`${PACKAGE}\` \`${VERSION}\`."
+
+  generate:
+    needs: parse
+    if: needs.parse.outputs.should_run == 'true'
+    uses: ./.github/workflows/_generator_reusable.yml
+    with:
+      LANG: ${{ needs.parse.outputs.lang }}
+      REPO: ${{ needs.parse.outputs.repo }}
+      SOURCE_URL: ${{ needs.parse.outputs.source_url }}
+      TAG: ${{ needs.parse.outputs.tag }}
+      P: ${{ needs.parse.outputs.p }}
+      WORKDIR: ${{ needs.parse.outputs.workdir }}
+      VENDORDIR: ${{ needs.parse.outputs.vendordir }}
+
+  finalize:
+    needs:
+      - parse
+      - generate
+    if: always() && needs.parse.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Comment failure
+        if: needs.generate.result != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh issue comment "$ISSUE_NUMBER" \
+            --body "Deps generation failed for \`${{ needs.parse.outputs.package }}\` \`${{ needs.parse.outputs.version }}\`. Check the workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Comment success and close issue
+        if: needs.generate.result == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          P: ${{ needs.parse.outputs.p }}
+          SOURCE_ISSUE_URL: ${{ needs.parse.outputs.source_issue_url }}
+        run: |
+          set -euo pipefail
+          release_url="${{ github.server_url }}/${{ github.repository }}/releases/tag/${P}"
+          body=$'Deps generation completed.\n\n'
+          body+="Release: ${release_url}"
+          if [[ -n "${SOURCE_ISSUE_URL}" ]]; then
+            body+=$'\n'
+            body+="Source issue: ${SOURCE_ISSUE_URL}"
+          fi
+          gh issue comment "$ISSUE_NUMBER" --body "$body"
+          gh issue close "$ISSUE_NUMBER"

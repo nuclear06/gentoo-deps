@@ -1,0 +1,83 @@
+name: Deps Request
+description: Request dependency tarball generation for a package update.
+title: "[deps] <category/pkg> -> <version>"
+labels:
+  - deps-request
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Submit the request, then add a comment with `/approve` to start CI.
+  - type: input
+    id: package
+    attributes:
+      label: Package
+      description: Overlay package name, for example `dev-util/shfmt`
+      placeholder: dev-util/shfmt
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: New version to package
+      placeholder: 3.13.1
+    validations:
+      required: true
+  - type: dropdown
+    id: lang
+    attributes:
+      label: Language
+      options:
+        - golang
+        - javascript
+        - javascript(pnpm)
+        - rust
+        - dart
+    validations:
+      required: true
+  - type: input
+    id: repo
+    attributes:
+      label: GitHub Repo
+      description: Optional GitHub repo in owner/name form
+      placeholder: mvdan/sh
+  - type: input
+    id: source_url
+    attributes:
+      label: Source URL
+      description: Optional git clone URL for non-GitHub sources
+      placeholder: https://gitlab.example.com/group/project.git
+  - type: input
+    id: tag
+    attributes:
+      label: Tag
+      placeholder: v3.13.1
+    validations:
+      required: true
+  - type: input
+    id: p
+    attributes:
+      label: P
+      description: Ebuild P value used for release tags and asset names
+      placeholder: shfmt-3.13.1
+    validations:
+      required: true
+  - type: input
+    id: workdir
+    attributes:
+      label: Workdir
+      description: Optional relative source subdirectory
+      placeholder: ""
+  - type: input
+    id: vendordir
+    attributes:
+      label: Vendordir
+      description: Optional relative vendor output directory for golang
+      placeholder: ""
+  - type: input
+    id: source_issue_url
+    attributes:
+      label: Source Issue URL
+      description: Optional originating overlay issue URL
+      placeholder: https://github.com/owner/repo/issues/123
