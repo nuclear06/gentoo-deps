@@ -113,6 +113,8 @@ jobs:
   generate:
     needs: parse
     if: needs.parse.outputs.should_run == 'true'
+    permissions:
+      contents: write
     uses: ./.github/workflows/_generator_reusable.yml
     with:
       LANG: ${{ needs.parse.outputs.lang }}
