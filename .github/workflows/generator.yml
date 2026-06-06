@@ -31,6 +31,8 @@ on:
 
 jobs:
   generator:
+    permissions:
+      contents: write
     uses: ./.github/workflows/_generator_reusable.yml
     with:
       LANG: ${{ inputs.LANG }}
